@@ -1,7 +1,6 @@
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.metrics import accuracy_score
-import time
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -11,11 +10,14 @@ from sklearn.neural_network import MLPClassifier
 
 # Minimal NumPy MLP implementation (dense layers, ReLU/tanh, softmax + CE)
 class MLP_Numpy:
-    def __init__(self, layer_sizes, activations, lr=0.01, l2=0.0, seed=42):
+    def __init__(self, layer_sizes, activations, lr=0.01, l2=0.0, seed=42, beta1=0.9, beta2=0.999, eps=1e-8):
         self.layer_sizes = layer_sizes
         self.activations = activations
         self.lr = lr
         self.l2 = l2
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.eps = eps
         rng = np.random.RandomState(seed)
         self.W = []
         self.b = []
@@ -26,6 +28,11 @@ class MLP_Numpy:
             limit = np.sqrt(6.0 / (in_dim + out_dim))
             self.W.append(rng.uniform(-limit, limit, size=(in_dim, out_dim))) # uniform samples with equal probability each number between -limit +limit
             self.b.append(np.zeros((out_dim,))) # initial b is zeros
+        self.mW = [np.zeros(w.shape) for w in self.W]
+        self.vW = [np.zeros(w.shape) for w in self.W]
+        self.mb = [np.zeros(b.shape) for b in self.b]
+        self.vb = [np.zeros(b.shape) for b in self.b]
+        self.t = 0
 
     def _act(self, x, name):
         # return activation and its derivative
@@ -64,12 +71,14 @@ class MLP_Numpy:
 
     def fit(self, X, Y, X_val=None, Y_val=None, epochs=10, batch_size=64, verbose=True):
         n = X.shape[0]
+        
         for epoch in range(1, epochs+1):
             # shuffle
             idx = np.random.permutation(n)
             Xs = X[idx]
             Ys = Y[idx]
             for i in range(0, n, batch_size):
+                self.t += 1
                 xb = Xs[i:i+batch_size]
                 yb = Ys[i:i+batch_size]
                 # forward
@@ -91,9 +100,17 @@ class MLP_Numpy:
                 # backprop output layer
                 dW = As[-1].T.dot(dZ) + self.l2 * self.W[-1]
                 db = np.asarray(dZ.sum(axis=0)).reshape(-1)
-                # update weights and biases (use non in-place assignment to avoid broadcasting issues)
-                self.W[-1] = self.W[-1] - self.lr * dW
-                self.b[-1] = self.b[-1] - self.lr * db
+                # Adam update output layer
+                self.mW[-1] = self.beta1*self.mW[-1] + (1-self.beta1)*dW
+                self.vW[-1] = self.beta2*self.vW[-1] + (1-self.beta2)*dW**2
+                self.mb[-1] = self.beta1*self.mb[-1] + (1-self.beta1)*db
+                self.vb[-1] = self.beta2*self.vb[-1] + (1-self.beta2)*db**2
+                mW_hat = self.mW[-1]/(1-self.beta1**self.t)
+                vW_hat = self.vW[-1]/(1-self.beta2**self.t)
+                mb_hat = self.mb[-1]/(1-self.beta1**self.t)
+                vb_hat = self.vb[-1]/(1-self.beta2**self.t)
+                self.W[-1] = self.W[-1] - self.lr * mW_hat / (np.sqrt(vW_hat) + self.eps)
+                self.b[-1] = self.b[-1] - self.lr * mb_hat / (np.sqrt(vb_hat) + self.eps)
                 dA = dZ.dot(self.W[-1].T)
                 # hidden layers
                 for j in range(len(self.W)-2, -1, -1):
@@ -102,8 +119,17 @@ class MLP_Numpy:
                     dZ = dA * act_prime # dloss/dz = dloss/dA * dA/dz dA/dz is act_prime, dloss/dA calculated in previous step
                     dW = As[j].T.dot(dZ) + self.l2 * self.W[j]
                     db = np.asarray(dZ.sum(axis=0)).reshape(-1)
-                    self.W[j] = self.W[j] - self.lr * dW
-                    self.b[j] = self.b[j] - self.lr * db
+                    # Adam update hidden layers
+                    self.mW[j] = self.beta1*self.mW[j] + (1-self.beta1)*dW
+                    self.vW[j] = self.beta2*self.vW[j] + (1-self.beta2)*dW**2
+                    self.mb[j] = self.beta1*self.mb[j] + (1-self.beta1)*db
+                    self.vb[j] = self.beta2*self.vb[j] + (1-self.beta2)*db**2
+                    mW_hat = self.mW[j]/(1-self.beta1**self.t)
+                    vW_hat = self.vW[j]/(1-self.beta2**self.t)
+                    mb_hat = self.mb[j]/(1-self.beta1**self.t)
+                    vb_hat = self.vb[j]/(1-self.beta2**self.t)
+                    self.W[j] = self.W[j] - self.lr * mW_hat / (np.sqrt(vW_hat) + self.eps)
+                    self.b[j] = self.b[j] - self.lr * mb_hat / (np.sqrt(vb_hat) + self.eps)
                     dA = dZ.dot(self.W[j].T)
             # epoch end: compute metrics
             if verbose:
@@ -130,15 +156,15 @@ Y = enc.fit_transform(y).toarray()
 X_train, X_val, Y_train, Y_val = train_test_split(X, Y, test_size=0.1, random_state=42, stratify=y)
 
 np.random.seed(1)
-model = MLP_Numpy(layer_sizes=[784, 128, 10], activations=['relu'], lr=0.01, l2=1e-4)
-start = time.time()
-model.fit(X_train, Y_train, X_val=X_val, Y_val=Y_val, epochs=5, batch_size=128, verbose=True)
-print('Training time:', time.time()-start)
+model = MLP_Numpy(layer_sizes=[784, 128,64, 10], activations=['relu', 'relu'], lr=0.001, l2=1e-4, seed=42, beta1=0.9, beta2=0.999, eps=1e-8)
+
+model.fit(X_train, Y_train, X_val=X_val, Y_val=Y_val, epochs=40, batch_size=128, verbose=True)
+
 # Evaluate on validation set
 val_preds = model.predict(X_val)
 print('Val accuracy (numpy MLP):', accuracy_score(np.argmax(Y_val,axis=1), val_preds))
-# sklearn baseline (simple)
-clf = MLPClassifier(hidden_layer_sizes=(512,256,128,64,), activation='relu', solver='adam', max_iter=30, random_state=1)
+
+clf = MLPClassifier(hidden_layer_sizes=(128,64,), activation='relu', solver='adam', max_iter=40, random_state=42)
 # clf = MLPClassifier(
 #     hidden_layer_sizes=(128,),
 #     activation='relu',
@@ -152,11 +178,14 @@ clf = MLPClassifier(hidden_layer_sizes=(512,256,128,64,), activation='relu', sol
 clf.fit(X_train, np.argmax(Y_train, axis=1))
 sk_preds = clf.predict(X_val)
 print('Val accuracy (sklearn MLP):', accuracy_score(np.argmax(Y_val, axis=1), sk_preds))
-# Prepare submission.csv using sklearn model (or model.predict on full test set)
 test_X = test.values.astype(np.float32) / 255.0
-test_preds = clf.predict(test_X)
+
+###########################################################################
+test_preds = model.predict(test_X) # our implementation
+test_preds = clf.predict(test_X) # scikitlearn
+#######################################################################
+
 sub = pd.DataFrame({'ImageId': np.arange(1, len(test_preds)+1), 'Label': test_preds})
-sub.to_csv('data/submission.csv', index=False)
+sub.to_csv(BASE_DIR / 'data' / 'submission.csv', index=False)
 print('Wrote submission.csv')
-# run in terminal to submit on kaggle
 # kaggle competitions submit -c digit-recognizer -f data/submission.csv -m "Message"
