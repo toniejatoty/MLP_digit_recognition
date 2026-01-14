@@ -48,7 +48,7 @@ class MLP_Numpy:
 
     def _softmax(self, z):
         # softmax is when you have 10 outputs for digit 0 X result, for digit 1 Y result ... soft max takes all of this result and scale it to probability 0-1 so the sum of probability will be 1
-        # ensure we operate on a NumPy ndarray (some ops may produce matrix/sparse types)
+        
         z = np.asarray(z) # changes to np array
         z = z - np.max(z, axis=1, keepdims=True) # to scale values to avoid numerical instability, keepsdims ensures that output is (10,1) not (10,)
         e = np.exp(z) # e^z
@@ -93,10 +93,9 @@ class MLP_Numpy:
                     As.append(A)
                 Z = A.dot(self.W[-1]) + self.b[-1]
                 P = self._softmax(Z)
-                # loss grad at output
-                m = yb.shape[0]
+
                 #loss function is cross entropy
-                dZ = (P - yb) / m # dloss/dZ for softmax + cross-entropy, /m to calculate mean
+                dZ = (P - yb) / yb.shape[0] # dloss/dZ for softmax + cross-entropy
                 # backprop output layer
                 dW = As[-1].T.dot(dZ) + self.l2 * self.W[-1]
                 db = np.asarray(dZ.sum(axis=0)).reshape(-1)
@@ -156,7 +155,7 @@ Y = enc.fit_transform(y).toarray()
 X_train, X_val, Y_train, Y_val = train_test_split(X, Y, test_size=0.1, random_state=42, stratify=y)
 
 np.random.seed(1)
-model = MLP_Numpy(layer_sizes=[784, 128,64, 10], activations=['relu', 'relu'], lr=0.001, l2=1e-4, seed=42, beta1=0.9, beta2=0.999, eps=1e-8)
+model = MLP_Numpy(layer_sizes=[784,512,256, 128,64,32,16, 10], activations=['relu', 'relu', 'relu', 'relu', 'relu', 'relu'], lr=0.001, l2=1e-4, seed=42, beta1=0.9, beta2=0.999, eps=1e-8)
 
 model.fit(X_train, Y_train, X_val=X_val, Y_val=Y_val, epochs=40, batch_size=128, verbose=True)
 
@@ -164,26 +163,32 @@ model.fit(X_train, Y_train, X_val=X_val, Y_val=Y_val, epochs=40, batch_size=128,
 val_preds = model.predict(X_val)
 print('Val accuracy (numpy MLP):', accuracy_score(np.argmax(Y_val,axis=1), val_preds))
 
-clf = MLPClassifier(hidden_layer_sizes=(128,64,), activation='relu', solver='adam', max_iter=40, random_state=42)
-# clf = MLPClassifier(
-#     hidden_layer_sizes=(128,),
-#     activation='relu',
-#     solver='sgd',                    
-#     learning_rate_init=0.01,         
-#     momentum=0.0,                    
-#     batch_size=128,                  
-#     max_iter=5,                      
-#     alpha=1e-4,
-#     random_state=42)
+clf = MLPClassifier(
+    hidden_layer_sizes=(512, 256,128, 64,32,16),
+    activation='relu',
+    solver='adam',
+    learning_rate_init=0.001,
+    alpha=1e-4,
+    batch_size=128,
+    max_iter=40,
+    beta_1=0.9,
+    beta_2=0.999,
+    epsilon=1e-8,
+    random_state=42
+)
 clf.fit(X_train, np.argmax(Y_train, axis=1))
 sk_preds = clf.predict(X_val)
 print('Val accuracy (sklearn MLP):', accuracy_score(np.argmax(Y_val, axis=1), sk_preds))
 test_X = test.values.astype(np.float32) / 255.0
 
-###########################################################################
+
+
 test_preds = model.predict(test_X) # our implementation
 test_preds = clf.predict(test_X) # scikitlearn
-#######################################################################
+
+
+
+
 
 sub = pd.DataFrame({'ImageId': np.arange(1, len(test_preds)+1), 'Label': test_preds})
 sub.to_csv(BASE_DIR / 'data' / 'submission.csv', index=False)
